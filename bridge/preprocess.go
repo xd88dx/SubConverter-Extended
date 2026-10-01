@@ -11,6 +11,10 @@ import (
 // preprocessSubscription fixes URL encoding issues and legacy share links before
 // the subscription is handed to mihomo's parser.
 func preprocessSubscription(subscription string) string {
+	if isBase64Subscription(subscription) {
+		return subscription
+	}
+
 	lines := strings.Split(subscription, "\n")
 	result := make([]string, 0, len(lines))
 
@@ -185,4 +189,48 @@ func firstQueryValue(values url.Values, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func isBase64Subscription(subscription string) bool {
+	value := strings.TrimSpace(subscription)
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return false
+	}
+
+	decoded, ok := decodeLooseBase64(value)
+	if !ok {
+		return false
+	}
+
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" {
+		return false
+	}
+
+	for _, line := range strings.Split(decoded, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if isProxyURI(line) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isProxyURI(line string) bool {
+	const prefixes = "vmess://,vless://,ss://,ssr://,trojan://,trojan-go://," +
+		"hysteria://,hysteria2://,hy2://,tuic://,anytls://," +
+		"wireguard://,socks://,mieru://,mierus://"
+
+	for _, prefix := range strings.Split(prefixes, ",") {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
