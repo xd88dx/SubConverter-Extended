@@ -573,3 +573,51 @@ func TestMieruExpansionLeavesUnrelatedInputByteForByte(t *testing.T) {
 		t.Fatalf("unrelated input changed:\nwant %q\n got %q", input, got)
 	}
 }
+
+func TestParseToleratesMalformedShareLinkInURIList(t *testing.T) {
+	input := strings.Join([]string{
+		"trojan://M7v%w11Se*@trojan.example.com:443?sni=broken.escape&allowInsecure=1#BrokenEscape",
+		"ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388#ValidSS",
+		"trojan://Km/pIG4AGCjCOiGWj5FsWA==@trojan.example.com:25040?sni=broken.userinfo#BrokenUserinfo",
+	}, "\n")
+
+	proxies, err := parseSubscriptionWithMihomo(input)
+	if err != nil {
+		t.Fatalf("malformed link rejected the whole subscription: %v", err)
+	}
+	if len(proxies) != 1 {
+		t.Fatalf("got %d proxies, want 1: %#v", len(proxies), proxies)
+	}
+	if proxies[0]["name"] != "ValidSS" {
+		t.Fatalf("unexpected surviving proxy: %#v", proxies[0])
+	}
+}
+
+func TestParseToleratesMalformedShareLinkInBase64Subscription(t *testing.T) {
+	inner := strings.Join([]string{
+		"vmess://" + base64.StdEncoding.EncodeToString([]byte(
+			`{"v":"2","ps":"GoodVMess","add":"198.51.100.10","port":"443","id":"959a8caf-4cea-43d0-a548-3628e7ddfafc","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":""}`)),
+		"trojan://M7v%w11Se*@trojan.example.com:443?sni=broken.escape#BrokenEscape",
+		"trojan://Km/pIG4AGCjCOiGWj5FsWA==@trojan.example.com:25040?sni=broken.userinfo#BrokenUserinfo",
+		"ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388#ValidSS",
+	}, "\n")
+	input := base64.StdEncoding.EncodeToString([]byte(inner))
+
+	proxies, err := parseSubscriptionWithMihomo(input)
+	if err != nil {
+		t.Fatalf("malformed link rejected the whole subscription: %v", err)
+	}
+	if len(proxies) != 2 {
+		t.Fatalf("got %d proxies, want 2: %#v", len(proxies), proxies)
+	}
+	if proxies[0]["name"] != "GoodVMess" || proxies[1]["name"] != "ValidSS" {
+		t.Fatalf("unexpected surviving proxies: %#v", proxies)
+	}
+}
+
+func TestParseStillRejectsSubscriptionWithoutAnyValidNode(t *testing.T) {
+	input := "trojan://M7v%w11Se*@trojan.example.com:443?sni=broken.escape#BrokenEscape"
+	if _, err := parseSubscriptionWithMihomo(input); err == nil {
+		t.Fatal("expected an error when no line can be parsed")
+	}
+}

@@ -25,11 +25,13 @@ func parseSubscriptionWithMihomo(subscription string) ([]map[string]any, error) 
 
 	// Match Mihomo's proxy-provider parser: prefer a native `proxies` YAML
 	// document, then fall back to its URI/base64 subscription converter.
+	fromConverter := false
 	if err := yaml.Unmarshal(buf, schema); err != nil {
 		proxies, convertErr := convert.ConvertsV2Ray(buf)
 		if convertErr != nil {
 			return nil, fmt.Errorf("%w, %w", err, convertErr)
 		}
+		fromConverter = true
 		schema.Proxies = proxies
 	}
 
@@ -49,6 +51,14 @@ func parseSubscriptionWithMihomo(subscription string) ([]map[string]any, error) 
 		}
 
 		if err := validateProxyMapping(mapping); err != nil {
+			if fromConverter {
+				// URI/base64 subscriptions can contain single broken share
+				// links (e.g. an invalid percent-escape or a "/" in the
+				// userinfo). ConvertsV2Ray may turn those into junk mappings,
+				// which must not sink the whole subscription the way the
+				// legacy parser never lets one bad node kill the rest.
+				continue
+			}
 			return nil, fmt.Errorf("proxy %d error: %w", index, err)
 		}
 
