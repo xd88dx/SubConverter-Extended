@@ -3734,6 +3734,7 @@ struct ParsedSubRequest {
   tribool generate_classical_rule_provider;
   tribool tls13;
   tribool provider_proxy_direct;
+  tribool inline_nodes;
 };
 
 static std::string parseSubRequestArguments(Request &request,
@@ -3841,6 +3842,7 @@ static std::string parseSubRequestArguments(Request &request,
   parsed.tfo = getUrlArg(argument, "tfo");
   parsed.udp = getUrlArg(argument, "udp");
   parsed.generate_node_list = getUrlArg(argument, "list");
+  parsed.inline_nodes = getUrlArg(argument, "inline");
   parsed.sort = getUrlArg(argument, "sort");
   parsed.use_sort_script = getUrlArg(argument, "sort_script");
   parsed.generate_clash_script = getUrlArg(argument, "script");
@@ -5204,6 +5206,14 @@ static SubStageResponse processSubscriptionNodes(
   if (ext.nodelist) {
     remote_mode = RemoteSubscriptionMode::ServerSideParse;
     remote_reason = "list-mode";
+  } else if (parsed.inline_nodes.get(false)) {
+    // inline=true expands subscription sources server-side (the same path as
+    // list-mode) while keeping the full configuration output, so the generated
+    // config contains clean inline nodes plus the template's groups and rules
+    // instead of client-managed proxy-providers.
+    remote_mode = RemoteSubscriptionMode::ServerSideParse;
+    remote_reason = "inline-mode";
+    ext.use_proxy_provider = false;
   } else if (remote_mode == RemoteSubscriptionMode::QuanXServerRemote) {
     remote_reason = quanxRemoteCapabilityReason(parsed, policy, settings);
     if (remote_reason != "native-capable")
@@ -7180,6 +7190,10 @@ static std::string assembleSubResponse(
                                       "proxy-providers when the request can be represented "
                                       "without losing advanced semantics."
                                     : "Clash-compatible output defaults to provider mode.")));
+    addParameter("inline", boolString(parsed.inline_nodes.get(false)),
+                 parsed.inline_nodes.get(false) ? "applied" : "ignored",
+                 "Expands remote subscriptions into inline nodes while "
+                 "keeping the full configuration output.");
     addSwitchParameter("sort", ext.sort_flag, argSort);
     addParameter("sort_script",
                  argUseSortScript ? "enabled" : "disabled",
@@ -7231,10 +7245,10 @@ static std::string assembleSubResponse(
         "include", "exclude", "groups", "ruleset", "config", "dev_id",
         "filename", "interval", "strict", "rename", "filter_script",
         "upload", "emoji", "add_emoji", "remove_emoji", "append_type",
-        "tfo", "udp", "list", "sort", "sort_script", "script", "insert",
-        "scv", "fdn", "expand", "append_info", "prepend", "classic",
-        "tls13", "provider_proxy_direct", "provider_headers", "explain",
-        "profile_data", "token"};
+        "tfo", "udp", "list", "inline", "sort", "sort_script", "script",
+        "insert", "scv", "fdn", "expand", "append_info", "prepend",
+        "classic", "tls13", "provider_proxy_direct", "provider_headers",
+        "explain", "profile_data", "token"};
     for (const auto &arg : argument) {
       if (known_parameters.find(arg.first) != known_parameters.end())
         continue;
