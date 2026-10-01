@@ -1,0 +1,130 @@
+name: Build and Push GHCR
+
+on:
+  push:
+    branches:
+      - master
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ghcr-master
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/subconverter-extended
+
+jobs:
+  test:
+    name: Test bridge
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bridge/go.sum
+
+      - name: Run bridge tests
+        working-directory: bridge
+        run: |
+          go test ./...
+
+      - name: Validate dependency snapshot
+        run: |
+          python3 scripts/ci/dependency_snapshot.py check
+
+  build-and-push:
+    name: Build and push GHCR
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Validate dependency snapshot
+        run: |
+          python3 scripts/ci/dependency_snapshot.py check
+
+      - name: Export dependency metadata
+        run: |
+          python3 scripts/ci/dependency_snapshot.py emit \
+            --github-env "$GITHUB_ENV"
+
+      - name: Set build metadata
+        run: |
+          echo "THREADS=4" >> "$GITHUB_ENV"
+          echo "SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "VERSION=dev" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "REFRESH_GO_DEPS=false" >> "$GITHUB_ENV"
+          echo "REFRESH_HEADERS=false" >> "$GITHUB_ENV"
+          echo "BUILD_TESTS=false" >> "$GITHUB_ENV"
+
+      - name: Prepare Docker build arguments
+        id: build_args
+        shell: bash
+        run: |
+          {
+            echo 'args<<EOF'
+            bash scripts/ci/docker-build-args.sh
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ${{ steps.build_args.outputs.args }}
+          cache-from: type=gha,scope=ghcr-amd64
+          cache-to: type=gha,mode=max,scope=ghcr-amd64
+
+      - name: Show image
+        run: |
+          echo "Published:"
+          echo "${{ env.IMAGE_NAME }}:latest"
+          echo "${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}"
