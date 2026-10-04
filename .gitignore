@@ -24,3 +24,6 @@ upstream-sync-decisions.raw
 # Local Markdown files under docs
 docs/*.md
 docs/**/*.md
+
+# WorkBuddy workspace data
+.workbuddy/
