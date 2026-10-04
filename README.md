@@ -181,6 +181,9 @@ proxy_direct:false,https://example.com/sub
 # 对整个请求覆盖 Mihomo Provider 的直连策略
 &provider_proxy_direct=false
 
+# 服务端解析订阅并内联展开节点，同时保留完整配置（分组与规则）
+&inline=true
+
 # 返回脱敏诊断报告，不返回配置文件
 &explain=true
 ```
