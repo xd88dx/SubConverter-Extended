@@ -27,3 +27,6 @@ docs/**/*.md
 
 # WorkBuddy workspace data
 .workbuddy/
+
+# Temporary files
+.tmp/
