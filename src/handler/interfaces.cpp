@@ -4080,9 +4080,11 @@ static std::string buildEffectiveSubPolicy(Request &request,
       !parsed.include_remark.empty() || !parsed.exclude_remark.empty();
   policy.requested_remote_node_rename = !parsed.renames.empty();
   policy.requested_remote_node_transform =
-      !parsed.emoji.is_undef() || parsed.add_emoji.get(false) ||
-      parsed.remove_emoji.get(false) || parsed.append_type.get(false) ||
-      parsed.sort.get(false) || parsed.filter_deprecated.get(false);
+      (settings.emojiEnabled &&
+       (!parsed.emoji.is_undef() || parsed.add_emoji.get(false) ||
+        parsed.remove_emoji.get(false))) ||
+      parsed.append_type.get(false) || parsed.sort.get(false) ||
+      parsed.filter_deprecated.get(false);
   policy.requested_remote_node_option_override =
       !parsed.tfo.is_undef() || !parsed.udp.is_undef() ||
       !parsed.skip_cert_verify.is_undef() || !parsed.tls13.is_undef();
@@ -4348,7 +4350,7 @@ static std::string buildExternalConfigFetchPlan(
       if (requested_config)
         policy.requested_remote_node_rename = true;
     }
-    if (!extconf.emoji.empty())
+    if (settings.emojiEnabled && !extconf.emoji.empty())
       policy.generator.emoji_array = extconf.emoji;
     if (!extconf.include.empty()) {
       policy.include_remarks = extconf.include;
@@ -4360,7 +4362,7 @@ static std::string buildExternalConfigFetchPlan(
       if (requested_config)
         policy.requested_remote_node_filter = true;
     }
-    if (requested_config &&
+    if (requested_config && settings.emojiEnabled &&
         (extconf.add_emoji.get(false) ||
          extconf.remove_old_emoji.get(false)))
       policy.requested_remote_node_transform = true;
@@ -4762,16 +4764,18 @@ static std::string buildExternalConfigFetchPlan(
   parsed.explain.ruleset_count = plan.ruleset_content.size();
   parsed.explain.custom_group_count = policy.custom_proxy_groups.size();
 
-  policy.generator.provider_emoji_enabled = parsed.emoji.get(false);
-  if (!parsed.emoji.is_undef()) {
-    parsed.add_emoji.set(parsed.emoji);
-    parsed.remove_emoji.set(true);
+  if (settings.emojiEnabled) {
+    policy.generator.provider_emoji_enabled = parsed.emoji.get(false);
+    if (!parsed.emoji.is_undef()) {
+      parsed.add_emoji.set(parsed.emoji);
+      parsed.remove_emoji.set(true);
+    }
+    policy.generator.add_emoji = parsed.add_emoji.get(settings.addEmoji);
+    policy.generator.remove_emoji =
+        parsed.remove_emoji.get(settings.removeEmoji);
+    if (policy.generator.add_emoji && policy.generator.emoji_array.empty())
+      policy.generator.emoji_array = settings.emojis;
   }
-  policy.generator.add_emoji = parsed.add_emoji.get(settings.addEmoji);
-  policy.generator.remove_emoji =
-      parsed.remove_emoji.get(settings.removeEmoji);
-  if (policy.generator.add_emoji && policy.generator.emoji_array.empty())
-    policy.generator.emoji_array = settings.emojis;
   if (!parsed.renames.empty()) {
     policy.generator.rename_array =
         INIBinding::from<RegexMatchConfig>::from_ini(
@@ -7312,22 +7316,29 @@ static std::string assembleSubResponse(
                      : "");
     const bool only_clash_providers =
         !ext.providers.empty() && explain.total_node_count == 0;
-    addParameter(
-        "emoji", boolString(only_clash_providers ? ext.provider_emoji_enabled
-                                                : ext.add_emoji),
-        "applied",
-        ext.providers.empty()
-            ? "Sets add_emoji and remove_emoji together."
-            : "Clash providers require explicit emoji=true; server-parsed "
-              "nodes keep the original emoji behavior.");
-    if (only_clash_providers) {
-      for (const char *name : {"add_emoji", "remove_emoji"})
-        addParameter(name, boolString(ext.provider_emoji_enabled), "ignored",
-                     "Clash provider emoji processing is controlled by emoji, "
-                     "not the independent switches.");
+    if (!settings.emojiEnabled) {
+      for (const char *name : {"emoji", "add_emoji", "remove_emoji"})
+        addParameter(name, "false", "ignored",
+                     "Emoji addition and removal are disabled by "
+                     "emojis.enabled in the backend configuration.");
     } else {
-      addSwitchParameter("add_emoji", ext.add_emoji, argAddEmoji);
-      addSwitchParameter("remove_emoji", ext.remove_emoji, argRemoveEmoji);
+      addParameter(
+          "emoji", boolString(only_clash_providers ? ext.provider_emoji_enabled
+                                                  : ext.add_emoji),
+          "applied",
+          ext.providers.empty()
+              ? "Sets add_emoji and remove_emoji together."
+              : "Clash providers require explicit emoji=true; server-parsed "
+                "nodes keep the original emoji behavior.");
+      if (only_clash_providers) {
+        for (const char *name : {"add_emoji", "remove_emoji"})
+          addParameter(name, boolString(ext.provider_emoji_enabled), "ignored",
+                       "Clash provider emoji processing is controlled by emoji, "
+                       "not the independent switches.");
+      } else {
+        addSwitchParameter("add_emoji", ext.add_emoji, argAddEmoji);
+        addSwitchParameter("remove_emoji", ext.remove_emoji, argRemoveEmoji);
+      }
     }
     addSwitchParameter("append_type", ext.append_proxy_type, argAppendType);
     addSwitchParameter("tfo", ext.tfo.get(false), ext.tfo);
@@ -9236,11 +9247,6 @@ std::string getProfile(RESPONSE_CALLBACK_ARGS) {
   }
   std::string profile_content;
   name = profiles[0];
-  /*if(vfs::vfs_exist(name))
-  {
-      profile_content = vfs::vfs_get(name);
-  }
-  else */
   if (fileExist(name)) {
     profile_content = fileGet(name, true);
   } else {
@@ -9250,12 +9256,10 @@ std::string getProfile(RESPONSE_CALLBACK_ARGS) {
            "Profile / 配置: " +
            name;
   }
-  // std::cerr<<"Trying to load profile '" + name + "'.\n";
   writeLog(LOG_LEVEL_INFO, "正在加载配置档：'" + name + "'。");
   INIReader ini;
   if (ini.parse(profile_content) != INIREADER_EXCEPTION_NONE &&
       !ini.section_exist("Profile")) {
-    // std::cerr<<"Load profile failed! Reason: "<<ini.get_last_error()<<"\n";
     const std::string parser_detail = ini.get_last_error();
     writeLog(LOG_LEVEL_ERROR, "PROFILE_CONFIG_PARSE_FAILED detail=" +
                     summarizeSensitiveTextForLog(parser_detail));
@@ -9263,12 +9267,10 @@ std::string getProfile(RESPONSE_CALLBACK_ARGS) {
     return "Invalid profile: failed to parse profile content.\n"
            "无效配置：profile 内容解析失败。";
   }
-  // std::cerr<<"Trying to parse profile '" + name + "'.\n";
   writeLog(LOG_LEVEL_INFO, "正在解析配置档：'" + name + "'。");
   string_multimap contents;
   ini.get_items("Profile", contents);
   if (contents.empty()) {
-    // std::cerr<<"Load profile failed! Reason: Empty Profile section\n";
     writeLog(LOG_LEVEL_ERROR, "加载配置档失败！原因：[Profile] 配置段为空。");
     *status_code = 500;
     return "Invalid profile: [Profile] section is empty.\n"
@@ -9365,11 +9367,9 @@ std::string subInfoToMessage(std::string subinfo) {
 }
 
 int simpleGenerator() {
-  // std::cerr<<"\nReading generator configuration...\n";
   writeLog(LOG_LEVEL_INFO, "正在读取生成器配置...");
   std::string config = fileGet("generate.ini"), path, profile, content;
   if (config.empty()) {
-    // std::cerr<<"Generator configuration not found or empty!\n";
     writeLog(LOG_LEVEL_ERROR, "未找到生成器配置，或配置为空！");
     return -1;
   }
@@ -9382,7 +9382,6 @@ int simpleGenerator() {
                     summarizeSensitiveTextForLog(ini.get_last_error()));
     return -2;
   }
-  // std::cerr<<"Read generator configuration completed.\n\n";
   writeLog(LOG_LEVEL_INFO, "生成器配置读取完成。\n");
 
   string_array sections = ini.get_section_names();
@@ -9397,7 +9396,6 @@ int simpleGenerator() {
       if (std::find(sections.cbegin(), sections.cend(), x) != sections.cend())
         new_targets.emplace_back(std::move(x));
       else {
-        // std::cerr<<"Artifact \""<<x<<"\" not found in generator settings!\n";
         writeLog(LOG_LEVEL_ERROR, "生成器设置中未找到生成项：\"" + x + "\"！");
         return -3;
       }
@@ -9405,7 +9403,6 @@ int simpleGenerator() {
     sections = new_targets;
     sections.shrink_to_fit();
   } else
-    // std::cerr<<"Generating all artifacts...\n";
     writeLog(LOG_LEVEL_INFO, "正在生成所有生成项...");
 
   string_multimap allItems;
@@ -9414,13 +9411,11 @@ int simpleGenerator() {
   for (std::string &x : sections) {
     Request request;
     Response response;
-    // std::cerr<<"Generating artifact '"<<x<<"'...\n";
     writeLog(LOG_LEVEL_INFO, "正在生成生成项：'" + x + "'。");
     ini.enter_section(x);
     if (ini.item_exist("path"))
       path = ini.get("path");
     else {
-      // std::cerr<<"Artifact '"<<x<<"' output path missing! Skipping...\n\n";
       writeLog(LOG_LEVEL_ERROR, "生成项 '" + x + "' 缺少输出路径，跳过。\n");
       continue;
     }
@@ -9504,11 +9499,9 @@ int simpleGenerator() {
     if (iter != response.headers.end())
       writeLog(LOG_LEVEL_INFO,
                "生成项 '" + x + "' 的用户信息：" + subInfoToMessage(iter->second));
-    // std::cerr<<"Artifact '"<<x<<"' generate SUCCESS!\n\n";
     writeLog(LOG_LEVEL_INFO, "生成项 '" + x + "' 生成成功！\n");
     eraseElements(response.headers);
   }
-  // std::cerr<<"All artifact generated. Exiting...\n";
   if (write_failed) {
     writeLog(LOG_LEVEL_ERROR, "部分生成项写入失败，正在以失败状态退出...");
     return -1;
