@@ -2360,6 +2360,8 @@ static void proxyToClashImpl(std::vector<Proxy> &nodes, YAML::Node &yamlnode,
         setClashInteger(singlegroup["interval"], x.Interval);
       if (x.Tolerance > 0)
         setClashInteger(singlegroup["tolerance"], x.Tolerance);
+      if (x.Timeout > 0)
+        setClashInteger(singlegroup["timeout"], x.Timeout * 1000);
       break;
     default:
       continue;
